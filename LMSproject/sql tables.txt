@@ -1,0 +1,62 @@
+CREATE TABLE members (
+    member_id serial PRIMARY KEY,
+    name text NOT NULL,
+    email text UNIQUE NOT NULL,
+    join_date timestamptz DEFAULT NOW()
+);
+
+CREATE TABLE books (
+    book_id serial PRIMARY KEY,
+    title text NOT NULL,
+    author text NOT NULL,
+    category text,
+    stock int NOT NULL DEFAULT 1
+);
+
+CREATE TABLE borrow_records (
+    record_id serial PRIMARY KEY,
+    member_id int REFERENCES members(member_id),
+    book_id int REFERENCES books(book_id),
+    borrow_date timestamptz DEFAULT NOW(),
+    return_date timestamptz
+);
+
+CREATE OR REPLACE FUNCTION borrow_book_transaction(
+    p_member_id INT,
+    p_book_id INT
+)
+RETURNS JSON AS $$
+DECLARE
+    current_stock INT;
+BEGIN
+    SELECT stock INTO current_stock FROM books WHERE book_id = p_book_id;
+    IF current_stock > 0 THEN
+        UPDATE books SET stock = stock - 1 WHERE book_id = p_book_id;
+        INSERT INTO borrow_records (member_id, book_id)
+        VALUES (p_member_id, p_book_id);
+        RETURN json_build_object('status', 'success', 'message', 'Book borrowed successfully.');
+    ELSE
+        RETURN json_build_object('status', 'error', 'message', 'Book is not in stock.');
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION return_book_transaction(
+    p_member_id INT,
+    p_book_id INT
+)
+RETURNS JSON AS $$
+DECLARE
+    existing_record_id INT;
+BEGIN
+    SELECT record_id INTO existing_record_id FROM borrow_records
+    WHERE member_id = p_member_id AND book_id = p_book_id AND return_date IS NULL;
+    IF existing_record_id IS NOT NULL THEN
+        UPDATE books SET stock = stock + 1 WHERE book_id = p_book_id;
+        UPDATE borrow_records SET return_date = NOW() WHERE record_id = existing_record_id;
+        RETURN json_build_object('status', 'success', 'message', 'Book returned successfully.');
+    ELSE
+        RETURN json_build_object('status', 'error', 'message', 'No active borrow record found for this member and book.');
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
